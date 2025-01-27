@@ -3,7 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 from mirascope.core import prompt_template
-from mirascope.core.groq import groq_call
+# from mirascope.core.groq import groq_call
 from mirascope.core.gemini import gemini_call
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -23,20 +23,65 @@ class QwantApi:
     
     def __init__(self):
         self.session = requests.Session()
+        self.cookies = {
+            'didomi_token': 'eyJ1c2VyX2lkIjoiMTkyNzY2ZTItMTUwYS02ZjVlLThkMzMtMjcxMDA4MzZlNGRiIiwiY3JlYXRlZCI6IjIwMjQtMTAtMTBUMTI6MzY6MjEuOTY4WiIsInVwZGF0ZWQiOiIyMDI0LTEwLTEwVDEyOjM2OjQ0LjY4NloiLCJ2ZW5kb3JzIjp7ImRpc2FibGVkIjpbImM6cXdhbnQtM01LS0paZHkiLCJjOnBpd2lrcHJvLWVBclpESFdEIiwiYzptc2NsYXJpdHktTU1ycFJKcnAiXX0sInZlbmRvcnNfbGkiOnsiZGlzYWJsZWQiOlsiYzpxd2FudC0zTUtLSlpkeSIsImM6cGl3aWtwcm8tZUFyWkRIV0QiXX0sInZlcnNpb24iOjJ9',
+            'euconsent-v2': 'CQGRvoAQGRvoAAHABBENBKFgAAAAAAAAAAqIAAAAAAAA.YAAAAAAAAAAA',
+            'datadome': 'UbjJyRuhTYDJvWL_1OrFhmtk8~85obvXe9Yixkewc66WxuI1bMfwCS3n~bi6KsZFSuMCYmjG4TseN1iAlCHVFEB~ydVVlXblkwrr7jEekLgSXOHoDwayJj75yeBCuKRP',
+        }
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36"
+            'User-Agent': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Referer': 'https://www.qwant.com/',
+            'Origin': 'https://www.qwant.com',
+            'Connection': 'keep-alive',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-site',
+            'DNT': '1',
+            'Sec-GPC': '1',
+            'Priority': 'u=4',
+            'Pragma': 'no-cache',
+            'Cache-Control': 'no-cache',
         })
     
-    def search(self, q: str, search_type: str = 'web', locale: str = 'en_US', offset: int = 0, safesearch: int = 1) -> Dict:
+    def search(self, q: str, search_type: str = 'web', locale: str = 'en_GB', offset: int = 0, safesearch: int = 1) -> Dict:
         params = {
             'q': q,
+            'count': '10',
             'locale': locale,
             'offset': offset,
-            'safesearch': safesearch
+            'device': 'desktop',
+            'tgp': '3',
+            'safesearch': safesearch,
+            'displayed': 'true',
+            'llm': 'true',
         }
+        
         url = f"{self.BASE_URL}/search/{search_type}"
-        response = self.session.get(url, params=params)
-        return response.json() if response.status_code == 200 else None
+        
+        try:
+            response = self.session.get(
+                url, 
+                params=params, 
+                cookies=self.cookies, 
+                timeout=10
+            )
+            response.raise_for_status()
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"Error: Status code {response.status_code}")
+                print(f"Response text: {response.text}")
+                return None
+                
+        except requests.exceptions.RequestException as e:
+            print(f"Request failed: {e}")
+            return None
+        except ValueError as e:
+            print(f"JSON decode failed: {e}")
+            return None
 
 # Model for structured response
 class SearchResponse(BaseModel):
@@ -52,36 +97,45 @@ class OptimizedQuery(BaseModel):
     reasoning: str = Field(description="The reasoning behind the query optimization")
 
 
-@groq_call("llama-3.3-70b-versatile", response_model=SearchType, json_mode=True)
+@gemini_call("gemini-2.0-flash-exp", response_model=SearchType, json_mode=True)
 @prompt_template(
 """
 SYSTEM:
-You are an expert at determining the most appropriate type of search for a given query. Your task is to analyze the user's question and decide which Qwant search type to use: web, news, images, or videos.
-
+You are an expert at identifying the most accurate Qwant search type: web, news, images, or videos.
 Follow these strict guidelines:
-1. For general information queries, use 'web'.
-2. For recent events, breaking news, or time-sensitive information, use 'news'.
-3. For queries explicitly asking for images or visual content, use 'images'.
-4. For queries about video content or asking for video results, use 'videos'.
-5. If unsure, default to 'web'.
+1. If the question explicitly or strongly suggests the need for general web information, set 'web'.
+2. If the question is about recent or time-sensitive events and breaking news, set 'news'.
+3. If the question is specifically about images or visual content, set 'images'.
+4. If the question is specifically about videos or video content, set 'videos'.
+5. If uncertain, default to 'web'.
 
-Provide your decision in a structured format with the search type and a brief explanation of your reasoning.
+Return a concise answer as valid JSON with two fields:
+- search_type
+- reasoning
 
 USER:
 Determine the most appropriate search type for the following question:
 {question}
 
 ASSISTANT:
-Based on the question, I will determine the most appropriate search type and provide my reasoning.
+I will choose the correct search type and justify it briefly based on the guidelines.
 """
 )
 def determine_search_type(question: str) -> SearchType:
     """
-    Determine the most appropriate search type for the given question.
+    Decide the most appropriate Qwant search type for a given query.
     """
     ...
 
-def qwant_search(query: str, search_type: str, max_results: int = 5) -> Dict[str, str]:
+def is_video_query(question: str, search_type: str) -> bool:
+    """Check if the query is video-related."""
+    video_keywords = ['video', 'youtube', 'watch', 'clip', 'footage']
+    return (
+        search_type == 'videos' or
+        any(keyword in question.lower() for keyword in video_keywords)
+    )
+
+def qwant_search(query: str, search_type: str, max_results: int = 6) -> Dict[str, str]:
     """
     Use Qwant to get information about the query using the specified search type.
     """
@@ -90,6 +144,7 @@ def qwant_search(query: str, search_type: str, max_results: int = 5) -> Dict[str
     urls = []  # Store original URLs
     qwant = QwantApi()
     results = qwant.search(query, search_type=search_type)
+    is_video_search = is_video_query(query, search_type)
     
     if results and 'data' in results and 'result' in results['data'] and 'items' in results['data']['result']:
         items = results['data']['result']['items']
@@ -100,22 +155,30 @@ def qwant_search(query: str, search_type: str, max_results: int = 5) -> Dict[str
         for item in items:
             if 'url' in item:
                 url = item['url']
+                # Skip YouTube URLs for non-video searches
+                if not is_video_search and ('youtube.com' in url or 'youtu.be' in url):
+                    continue
                 print(f"Fetching content from {url}...")
-                content = get_content(url)
-                search_results[url] = content
-                urls.append(url)  # Store the URL
-                count += 1
+                content = get_content(url, is_video_search)
+                if content:  # Only add if content was retrieved
+                    search_results[url] = content
+                    urls.append(url)  # Store the URL
+                    count += 1
                 if count >= max_results:
                     break
             elif isinstance(item, dict) and 'items' in item:
                 for subitem in item['items']:
                     if 'url' in subitem:
                         url = subitem['url']
+                        # Skip YouTube URLs for non-video searches
+                        if not is_video_search and ('youtube.com' in url or 'youtu.be' in url):
+                            continue
                         print(f"Fetching content from {url}...")
-                        content = get_content(url)
-                        search_results[url] = content
-                        urls.append(url)  # Store the URL
-                        count += 1
+                        content = get_content(url, is_video_search)
+                        if content:  # Only add if content was retrieved
+                            search_results[url] = content
+                            urls.append(url)  # Store the URL
+                            count += 1
                         if count >= max_results:
                             break
                 if count >= max_results:
@@ -163,36 +226,37 @@ def get_youtube_transcript(video_id: str) -> str:
         print(f"Error fetching transcript: {e}")
         return ""
 
-def get_content(url: str) -> str:
+def get_content(url: str, is_video_search: bool = False) -> str:
     """
-    Fetch and parse content from a URL, including YouTube transcripts.
+    Fetch and parse content from a URL, including YouTube transcripts only for video queries.
     """
     data = []
     try:
         # Check if it's a YouTube URL
         video_id = extract_youtube_id(url)
-        if video_id:
+        if video_id and is_video_search:
             transcript = get_youtube_transcript(video_id)
             if transcript:
-                # Clean and format content to avoid JSON issues
                 cleaned_transcript = transcript.replace('"', "'").replace('\\', '').strip()
                 data.append(cleaned_transcript)
+            return " ".join(data) if data else ""
+        
+        # Skip YouTube URLs for non-video searches
+        if video_id and not is_video_search:
+            return ""
         
         # Get regular webpage content
-        if not video_id:  # Only fetch webpage content for non-YouTube URLs
-            response = requests.get(url)
-            content = response.content
-            soup = BeautifulSoup(content, "html.parser")
-            paragraphs = soup.find_all("p")
-            for paragraph in paragraphs:
-                # Clean and format content to avoid JSON issues
-                cleaned_text = paragraph.text.replace('"', "'").replace('\\', '').strip()
-                if cleaned_text:
-                    data.append(cleaned_text)
+        response = requests.get(url)
+        content = response.content
+        soup = BeautifulSoup(content, "html.parser")
+        paragraphs = soup.find_all("p")
+        for paragraph in paragraphs:
+            cleaned_text = paragraph.text.replace('"', "'").replace('\\', '').strip()
+            if cleaned_text:
+                data.append(cleaned_text)
     except Exception as e:
         print(f"Error fetching content from {url}: {e}")
     
-    # Join content without truncation
     return " ".join(data)
 
 @gemini_call("gemini-2.0-flash-exp")
@@ -240,12 +304,11 @@ Pay special attention to YouTube transcripts when available, as they may contain
 Guidelines for response:
 1. Start with a clear, concise summary of the main points
 2. Structure the answer in logical sections with clear headings when appropriate
-3. Include relevant quotes, statistics, and facts with proper citations
-4. For YouTube content, cite specific content summaries
+3. Include relevant quotes, statistics, and facts
+4. For YouTube content, include relevant spoken content
 5. Provide context and background information
 6. Address multiple aspects of the question
-7. Cite sources using [Source X] notation for every major claim
-8. End with a conclusion or summary of key takeaways
+7. End with a conclusion or summary of key takeaways
 
 Format requirements:
 - Keep responses concise and well-structured
@@ -253,8 +316,6 @@ Format requirements:
 - Include direct quotes sparingly and with proper escaping
 - Organize information in clear paragraphs
 - Highlight key points without complex formatting
-- Reference sources by number [Source X]
-- For YouTube sources, reference them as "YouTube video [Source X]"
 
 Search results:
 {results}
@@ -274,6 +335,23 @@ def clean_text(text: str) -> str:
     """
     # Removing extra spaces and special characters
     return re.sub(r'\s+', ' ', text).strip()
+
+def format_answer(text: str) -> str:
+    """Format the answer text with proper sections and spacing."""
+    # Split text into sections based on common heading patterns
+    sections = re.split(r'\n(?=[A-Z][^a-z]*:)', text)
+    
+    formatted_sections = []
+    for section in sections:
+        # Check if the section has a heading
+        if ':' in section:
+            heading, content = section.split(':', 1)
+            formatted_sections.append(f"{Fore.YELLOW}{heading.strip()}:{Style.RESET_ALL}")
+            formatted_sections.append(f"{content.strip()}\n")
+        else:
+            formatted_sections.append(section.strip() + "\n")
+    
+    return "\n".join(formatted_sections)
 
 class Spinner:
     def __init__(self, message="Loading..."):
@@ -361,37 +439,24 @@ if __name__ == "__main__":
             
             try:
                 response = run(question)
-                print("\n" + "="*100)
-                print("COMPREHENSIVE ANSWER:")
-                print("="*100 + "\n")
-                print(response.answer)
-                print("\n" + "="*100)
                 
-                print("\nDETAILED SOURCES:")
-                print("="*100)
+                # Display the answer
+                print(f"\n{Fore.CYAN}{'='*100}{Style.RESET_ALL}")
+                print(f"{Fore.GREEN}📝 ANSWER{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}{'='*100}{Style.RESET_ALL}\n")
+                print(format_answer(response.answer))
+                
+                # Display sources
+                print(f"\n{Fore.CYAN}{'='*100}{Style.RESET_ALL}")
+                print(f"{Fore.GREEN}🔍 SOURCES{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}{'='*100}{Style.RESET_ALL}")
                 for idx, source in enumerate(response.sources, 1):
-                    print(f"\n[Source {idx}]")
-                    if "youtube.com" in source or "youtu.be" in source:
-                        print(f"URL: {source}  (YouTube Video)")
-                    else:
-                        print(f"URL: {source}")
-                    try:
-                        response = requests.head(source, timeout=5)
-                        if response.status_code == 200:
-                            print(f"Status: Available | Last Referenced: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-                            print(f"Direct Link: {source}")
-                        else:
-                            print(f"Status: Not Available (Code: {response.status_code})")
-                    except:
-                        print("Status: Not Available (Connection Error)")
-                    print("-"*100)
-                
-                print("\nNote: Click or copy the URLs above to access the original sources")
-                print("="*100 + "\n")
+                    print(f"{Fore.BLUE}[{idx}] {source}{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}{'='*100}{Style.RESET_ALL}\n")
                 
             except Exception as e:
-                print(f"\nError: {e}")
+                print(f"\n{Fore.RED}Error: {e}{Style.RESET_ALL}")
                 print("Please try asking another question.")
                 
     except KeyboardInterrupt:
-        print("\nSearch Assistant terminated. Goodbye!")
+        print(f"\n{Fore.YELLOW}Search Assistant terminated. Goodbye!{Style.RESET_ALL}")
