@@ -3,7 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 from mirascope.core import prompt_template
-# from mirascope.core.groq import groq_call
+from mirascope.core.groq import groq_call
 from mirascope.core.gemini import gemini_call
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -26,7 +26,7 @@ class QwantApi:
         self.cookies = {
             'didomi_token': 'eyJ1c2VyX2lkIjoiMTkyNzY2ZTItMTUwYS02ZjVlLThkMzMtMjcxMDA4MzZlNGRiIiwiY3JlYXRlZCI6IjIwMjQtMTAtMTBUMTI6MzY6MjEuOTY4WiIsInVwZGF0ZWQiOiIyMDI0LTEwLTEwVDEyOjM2OjQ0LjY4NloiLCJ2ZW5kb3JzIjp7ImRpc2FibGVkIjpbImM6cXdhbnQtM01LS0paZHkiLCJjOnBpd2lrcHJvLWVBclpESFdEIiwiYzptc2NsYXJpdHktTU1ycFJKcnAiXX0sInZlbmRvcnNfbGkiOnsiZGlzYWJsZWQiOlsiYzpxd2FudC0zTUtLSlpkeSIsImM6cGl3aWtwcm8tZUFyWkRIV0QiXX0sInZlcnNpb24iOjJ9',
             'euconsent-v2': 'CQGRvoAQGRvoAAHABBENBKFgAAAAAAAAAAqIAAAAAAAA.YAAAAAAAAAAA',
-            'datadome': 'UbjJyRuhTYDJvWL_1OrFhmtk8~85obvXe9Yixkewc66WxuI1bMfwCS3n~bi6KsZFSuMCYmjG4TseN1iAlCHVFEB~ydVVlXblkwrr7jEekLgSXOHoDwayJj75yeBCuKRP',
+            'datadome': 'Hu02p1l32WwzSk4_NJ26axGqTjiJPVbwW1pJBmB0Mjk3unmfjHeYPuYlJE9iZGX9pRFqHBhJCNR_punKCS4eaLpZogx~IU78SsLMuZAyBbT0GgugWOUs2XUVDca3h6RD',
         }
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0',
@@ -144,6 +144,17 @@ def qwant_search(query: str, search_type: str, max_results: int = 6) -> Dict[str
     urls = []  # Store original URLs
     qwant = QwantApi()
     results = qwant.search(query, search_type=search_type)
+    
+    # If news search returns no results, fallback to web search
+    if (search_type == 'news' and 
+        (not results or 
+         not results.get('data') or 
+         not results['data'].get('result') or 
+         not results['data']['result'].get('items'))):
+        print("No news results found, falling back to web search...")
+        search_type = 'web'
+        results = qwant.search(query, search_type='web')
+    
     is_video_search = is_video_query(query, search_type)
     
     if results and 'data' in results and 'result' in results['data'] and 'items' in results['data']['result']:
